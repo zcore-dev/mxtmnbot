@@ -16,4 +16,18 @@ A simple telegram bot for cryptocoin masternodes, and block explorer API, using 
 
 7 - Be Happy
 
-#notoFCC
+# changelog
+
+# 19/12/2017 - adicionado comandos:
+/newbuy   - Adicionar anuncio de compra
+/endbuy   - Remover anuncio de compra
+
+/newsell  - Adicionar anuncio de venda
+/endell   - Remover anuncio de venda
+
+/lbuys    - Listar anuncios de compra
+/lsells   - Listar anuncios de venda
+
+
+
+# #notoFCC
