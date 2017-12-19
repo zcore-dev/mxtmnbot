@@ -8,9 +8,7 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -20,103 +18,77 @@ import (
 	"github.com/yanzay/tbot"
 )
 
-//Block Explorer
-const apibe = "https://be.martexcoin.org/ext/getbalance/"
-
-//Max users
-const MAX_DB = 1024
-
-//Masternode balance
-const MN_BALANCE = 5000.0
-
-//Data from users
-type Dados struct {
-	//identificacao
-	charid     string
-	charwallet string
-
-	//dados
-	taxa        float64
-	porcentagem float64
-	last_rent   float64
-	rendimento  float64
-	balance     float64
-
-	//se foi configurado
-	isSet bool
-}
-
-//DB
-type Database struct {
-	dados []Dados
-	count int
-}
-
-//...
 var db Database
 
-//Convert float64 to str
-func floattostr(fv float64) string {
-	return strconv.FormatFloat(fv, 'f', 2, 64)
-}
-
-//Convert str to float64
-func strtofloat(sv string) float64 {
-	x, _ := strconv.ParseFloat(sv, 64)
-	return x
-}
-
-//*Obter saldo da carteira na API
-//*Get wallet balance
-func getbalance(wall string) string {
-	get, err := http.Get(apibe + wall)
-	if err != nil {
-		return "-1"
-	}
-	defer get.Body.Close()
-
-	resp, err := ioutil.ReadAll(get.Body)
-	if err != nil {
-		return "-1"
-	}
-
-	return (string(resp))
-}
-
-//*comando /wallet
-//* /wallet command
-func wallet(m *tbot.Message) {
-	carteira := m.Vars["carteira"]
-	if len(carteira) < 0 {
-		m.Reply("Use: /wallet <carteira>")
-		return
-	}
-	resp := getbalance(carteira)
-	if len(resp) > 0 {
-		m.Reply("Saldo: " + resp)
-
-	} else {
-		m.Reply("falha ao obter saldo!")
-	}
-}
-
-/*Obter dados, caso existir*/
+/* Obter dados do usuário */
 func getData(user string) (*Dados, bool) {
+	fmt.Printf("$Procurando %s \n", user)
 
-	fmt.Printf("Procurando %s \n", user)
-	i := 0
-	for i < db.count {
+	for i := 0; i < db.count; i++ {
 		if db.dados[i].charid == user {
 			return &db.dados[i], false
 		}
 		i++
 	}
-	fmt.Printf("Sem sucesso! \n")
+
+	fmt.Printf("$Sem sucesso! \n")
+
+	//alocar
 	if db.count == 0 {
 		db.dados = make([]Dados, 999)
 	}
-	db.dados[db.count] = Dados{"", "", 0.0, 0.0, 0.0, 0.0, 0.0, false}
+
+	//novo
+	db.dados[db.count] = Dados{"", "", 0.0, 0.0, 0.0, 0.0, 0.0, false, nil, 0, nil, 0}
 	return &db.dados[db.count], true
+}
+
+/*Obter anuncios de compra do usuário */
+func getDataBuy(user string) (*Buy, bool) {
+
+	fmt.Printf("$Procurando Buys de %s \n", user)
+
+	for i := 0; i < db.count; i++ {
+		if db.dados[i].charid == user {
+
+			//buscar um local desativado
+			for x := 0; x < db.dados[i].buyc; x++ {
+				if db.dados[i].buys[x].end {
+					db.dados[i].buys[x].id = x
+					return &db.dados[i].buys[x], false
+				}
+			}
+			//novo
+			db.dados[i].buyc++
+			return &db.dados[i].buys[db.dados[i].buyc-1], true
+		}
+		i++
+	}
+	fmt.Printf("$Sem sucesso! \n")
+	return nil, true
+}
+
+/*Obter anuncios de venda do usuário */
+func getDataSell(user string) (*Sell, bool) {
+
+	fmt.Printf("$Procurando Sells de %s \n", user)
+
+	for i := 0; i < db.count; i++ {
+		if db.dados[i].charid == user {
+			//algum local desativado?
+			for x := 0; x < db.dados[i].sellc; x++ {
+				if db.dados[i].sells[x].end {
+					return &db.dados[i].sells[x], false
+				}
+			}
+			//novo
+			db.dados[i].sellc++
+			return &db.dados[i].sells[db.dados[i].sellc-1], true
+		}
+		i++
+	}
+	fmt.Printf("$Sem sucesso! \n")
+	return nil, true
 }
 
 //adiciona usuário ou configura novos dados - /setup
@@ -169,12 +141,11 @@ func setuser(m *tbot.Message) {
 }
 
 //comando /me - não requer argumentos, é preciso configra-lo
-//*Get masternode rent
 func mnrend(m *tbot.Message) {
 
 	//verificar se o usuário fez /setup
 	user, inativo := getData(m.From.UserName)
-	if inativo {
+	if inativo || !user.isSet {
 		m.Reply("Essse comando é automático.\nPortanto configure usando: \n/setup <carteira> <taxa> <porcentagem> !")
 		return
 	}
@@ -206,7 +177,6 @@ func mnrend(m *tbot.Message) {
 	}
 
 	m.Reply("Próximo recompensa: " + floattostr(user.rendimento) + "\nSem taxa: " + floattostr(user.rendimento+(user.rendimento*(user.taxa/100))))
-
 }
 
 func main() {
@@ -214,32 +184,264 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	db.count = 0
-  
-  //Telegram command handlers
+
 	bot.HandleFunc("/sobre", sobre)
 	bot.HandleFunc("/start", sobre)
+
 	bot.HandleFunc("/wallet {carteira}", wallet)
+
+	//rendimento do masternode
 	bot.HandleFunc("/setup {carteira} {taxa} {porc}", setuser)
 	bot.HandleFunc("/me", mnrend)
+
+	//anunciar/finalizar/listar venda
+	bot.HandleFunc("/newsell {XNS} {MXT} {BRL} {contato}", newsell)
+	bot.HandleFunc("/endsell {id}", endsell)
+	bot.HandleFunc("/lsells", listsells)
+
+	//anunciar/finalizar/listar compra
+	bot.HandleFunc("/newbuy {MXT} {contato}", newbuy)
+	bot.HandleFunc("/endbuy {id}", endbuy)
+	bot.HandleFunc("/lbuys", listbuys)
 	bot.ListenAndServe()
 
 }
 
+func newsell(m *tbot.Message) {
+	user, nexiste := getData(m.From.UserName)
+	if nexiste {
+		m.Reply("Usuário cadastrado! Bem vindo!")
+		m.Reply("Tente não acomular sells!")
+
+		*user = Dados{
+			charid: m.From.UserName, //nome do usuário
+			sells:  make([]Sell, MAX_DB_SELL),
+			buys:   make([]Buy, MAX_DB_BUY),
+		}
+
+		db.count++
+	}
+	if user.sellc >= MAX_DB_SELL {
+		m.Replyf("Você excedeu %d pedidos.", MAX_DB_SELL)
+		return
+	}
+
+	//dados
+	xnsn := m.Vars["XNS"]
+	mxtf := m.Vars["MXT"]
+	brlf := m.Vars["BRL"]
+	contn := m.Vars["contato"]
+
+	//log
+	fmt.Printf("#BUY {%s} {%s} {%s}\n", m.From.UserName, mxtf, brlf, contn)
+
+	//fail?
+	if len(xnsn) < 0 || len(mxtf) < 0 || len(brlf) < 0 || len(contn) < 0 {
+		m.Reply("Use: /annsell <xns_n> <mxt_pedido> <brl_pedido> <contato> ")
+		return
+	} else {
+		//cadastro
+		bi, novo := getDataSell(m.From.UserName)
+
+		*bi = Sell{
+			xns:       xnsn,
+			contato:   contn,
+			mxt_price: strtofloat(mxtf),
+			brl_price: strtofloat(brlf),
+			end:       false,
+		}
+
+		//output
+		m.Reply("--------------------")
+		m.Reply("▌▌▌▌EXTRATO▌▌▌▌")
+		if novo {
+			m.Replyf("▌ID: %d", user.sellc)
+		} else {
+			m.Replyf("▌ID: %d", bi.id)
+		}
+		m.Reply("▌de: " + bi.contato)
+		m.Reply("▌MN: XNs" + bi.xns)
+		m.Replyf("▌mxt_price: %f", bi.mxt_price)
+		m.Replyf("▌brl_price: %f", bi.brl_price)
+		m.Reply("--------------------")
+		m.Reply("Nao apague o extrato!")
+		m.Reply("--------------------")
+	}
+
+}
+
+func endsell(m *tbot.Message) {
+	user, nexiste := getData(m.From.UserName)
+	if nexiste {
+		m.Reply("Você não está cadastrado!")
+		return
+	}
+	if user.sellc <= 0 {
+		m.Reply("Você não efetuou nenhum anúncio de venda.")
+		return
+	}
+
+	//dados
+	bid, err := strconv.Atoi(m.Vars["id"])
+
+	//fail?
+	if err != nil {
+		m.Reply("Use: /endsell <id>")
+		return
+	} else {
+		//cadastro
+		user.sells[bid].end = true
+
+		//output
+		m.Reply("Feito!")
+	}
+}
+
+func newbuy(m *tbot.Message) {
+	user, inexiste := getData(m.From.UserName)
+	if inexiste {
+		m.Reply("Usuário cadastrado! Bem vindo!")
+		m.Reply("Tente não acomular buys!")
+
+		*user = Dados{
+			charid: m.From.UserName, //nome do usuário
+			sells:  make([]Sell, MAX_DB_SELL),
+			buys:   make([]Buy, MAX_DB_BUY),
+		}
+
+		db.count++
+	}
+	if user.buyc >= MAX_DB_BUY {
+		m.Replyf("Você excedeu %d pedidos.", MAX_DB_BUY)
+		return
+	}
+
+	//dados
+	mxtf := m.Vars["MXT"]
+	contn := m.Vars["contato"]
+
+	//log
+	fmt.Printf("#SELL {%s} {%s}\n", m.From.UserName, mxtf, contn)
+
+	//invalido
+	if len(mxtf) < 0 || len(contn) < 0 {
+		m.Reply("Use: /annbuy <mxt_pedido> <contato> ")
+		return
+
+	} else {
+		//cadastro
+		bi, novo := getDataBuy(m.From.UserName)
+		*bi = Buy{
+			contato:   contn,
+			mxt_price: strtofloat(mxtf),
+			end:       false,
+		}
+
+		//output
+		m.Reply("--------------------")
+		m.Reply("▌▌▌▌EXTRATO▌▌▌▌")
+		if novo {
+			m.Replyf("▌ID: %d", user.buyc)
+		} else {
+			m.Replyf("▌ID: %d", bi.id)
+		}
+		m.Reply("▌de: " + bi.contato)
+		m.Replyf("▌mxt_price: %f", bi.mxt_price)
+		m.Reply("--------------------")
+		m.Reply("Nao apague o extrato!")
+		m.Reply("--------------------")
+	}
+
+}
+
+func endbuy(m *tbot.Message) {
+	user, nexiste := getData(m.From.UserName)
+	if nexiste {
+		m.Reply("Você não está cadastrado!")
+		return
+	}
+	if user.buyc <= 0 {
+		m.Reply("Você não efetuou nenhum anuncio de compra.")
+		return
+	}
+
+	//dados
+	bid, err := strconv.Atoi(m.Vars["id"])
+
+	//fail?
+	if err != nil || bid < 0 || bid > MAX_DB_BUY {
+		m.Reply("Use: /endbuy <id>")
+		return
+	} else {
+
+		//cadastro
+		user.buys[bid].end = true
+
+		//output
+		m.Reply("Feito!")
+	}
+}
+
+//listar ordens de venda
+func listsells(m *tbot.Message) {
+	m.Reply("ID - XNs - MXT pedido - BRL pedido - Contato ")
+	for i := 0; i < db.count; i++ {
+		fmt.Print(db.dados[i].sellc)
+		for x := 0; x < db.dados[i].sellc; x++ {
+			if !db.dados[i].sells[x].end {
+				m.Replyf("%d - %s - %f - %f - %s", x,
+					db.dados[i].sells[x].xns,
+					db.dados[i].sells[x].mxt_price,
+					db.dados[i].sells[x].brl_price,
+					db.dados[i].sells[x].contato)
+			}
+		}
+	}
+}
+
+//listar ordens de compra
+func listbuys(m *tbot.Message) {
+	m.Reply("ID - lance de MXT - Contato ")
+	for i := 0; i < db.count; i++ {
+		for x := 0; x < db.dados[i].buyc; x++ {
+			if !db.dados[i].buys[x].end {
+				m.Replyf("%d - %f - %s", x,
+					db.dados[i].buys[x].mxt_price,
+					db.dados[i].buys[x].contato)
+			}
+		}
+	}
+}
+
 //about
 func sobre(m *tbot.Message) {
+	m.Reply("MN BOT - 0.0.2 - @OneFreakDay")
 	m.Replyf("------------------------------")
 	m.Replyf("----  Comandos básicos   -----")
 	m.Replyf("------------------------------")
-	m.Replyf("/wallet <carteira> - Obter saldo da carteira.")
-	m.Replyf("/eraseme - Limpar seus dados do bot(nome de usuário, carteira, saldo). P.S: Inativo\n")
-	m.Replyf("----------------------------")
-	m.Replyf("----    Configuração   -----")
-	m.Replyf("----------------------------")
+	m.Replyf("/wallet <carteira> - Obter saldo de uma carteira.")
+	m.Replyf("------------------------------------\n")
+	m.Replyf("/newsell <xns_n> <mxt_pedido> <brl_pedido> <contato> - Anunciar venda de XNs\n")
+	m.Replyf("/endsell <id> - Finalizar anuncio de venda de XNs\n")
+	m.Replyf("/mysells - Listar suas vendas XNs\n")
+	m.Replyf("------------------------------------\n")
+	m.Replyf("/newbuy <mxt_max> <contato> - Anunciar compra de XNs\n")
+	m.Replyf("/endbuy <id> - Finalizar anuncio de compra de XNs\n")
+	m.Replyf("/mybuys - Listar suas compras XNs\n")
+	m.Replyf("------------------------------------\n")
+	m.Replyf("/lbuys - Listar ofertas de compra\n")
+	m.Replyf("/lsells - Listar ofertas de venda\n")
+
+	m.Replyf("\n----------------------------------------------------------")
+	m.Replyf("----    Configuração para rendimento de masternode   -----")
+	m.Replyf("----------------------------------------------------------")
 	m.Replyf("- 1º use:")
-	m.Replyf("/setup <carteira> <taxa> <porcentagem>\n Use para configurar dados. \n- taxa = Taxa do Masternode \n- porcentagem = sua porcentagem do Masternode\n")
+	m.Replyf("/setup <carteira> <taxa> <porcentagem>\n Use para configurar dados do Masternode. \n- taxa = Taxa do Masternode \n- porcentagem = sua porcentagem do Masternode\n")
 	m.Replyf("- 2º agora você só precisa usar:")
-	m.Replyf("/me - use quando quiser, após configurar com /setup\n")
-	m.Replyf("\n\nP.S: Seu nome de usuário é salvo apenas para poder identificar suas configurações.")
-	m.Reply("MN BOT - 0.0.1 - @OneFreakDay - https://github.com/apollomatheus/mxtmnbot")
+	m.Replyf("/me - Sua Próxima recompensa\n")
+	m.Replyf("*Seu nome de usuário é salvo apenas para poder identificar suas configurações.")
+	m.Replyf("*Dados são apagados quando o bot fica offline.")
+	m.Reply("Código: https://github.com/apollomatheus/mxtmnbot")
 }
